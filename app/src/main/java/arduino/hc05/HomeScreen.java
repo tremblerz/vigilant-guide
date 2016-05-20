@@ -9,6 +9,8 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.media.MediaPlayer;
 import android.os.Bundle;
+import android.os.Handler;
+import android.speech.tts.TextToSpeech;
 import android.support.v7.app.ActionBarActivity;
 import android.text.Html;
 import android.util.Log;
@@ -26,18 +28,24 @@ import android.widget.Toast;
 import android.widget.ToggleButton;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.Locale;
 import java.util.UUID;
 
 
 public class HomeScreen extends ActionBarActivity {
     private static final String TAG = "HC-05:";
 
+    TextToSpeech t1;
     Button btnScan;
     ImageButton btnCN;
-    ToggleButton btnOnOff1, btnOnOff2;
-    TextView item1, item2;
+    ToggleButton btnOnOff1;//, btnOnOff2;
+    TextView item1;//, item2;
     LinearLayout sl;
+    String prev[],orig[];
+    double pitch;
+    String state = "" ;
 
 
     private static final int REQUEST_ENABLE_BT = 1;
@@ -45,6 +53,10 @@ public class HomeScreen extends ActionBarActivity {
     private BluetoothAdapter btAdapter = null;
     private BluetoothSocket btSocket = null;
     private OutputStream outStream = null;
+    private InputStream inputStream = null;
+    private Boolean stopThread;
+    byte buffer[];
+    private TextView textView;
 
     private static final UUID MY_UUID =
             UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");    //UUID for SPP service
@@ -73,13 +85,28 @@ public class HomeScreen extends ActionBarActivity {
         btnScan = (Button) findViewById(R.id.btnscan);
         btnCN = (ImageButton) findViewById(R.id.Connection);
         btnOnOff1 = (ToggleButton) findViewById(R.id.OnOff1);
-        btnOnOff2 = (ToggleButton) findViewById(R.id.OnOff2);
+ //       btnOnOff2 = (ToggleButton) findViewById(R.id.OnOff2);
         item1 = (TextView) findViewById(R.id.item1);
-        item2 = (TextView) findViewById(R.id.item2);
+//        item2 = (TextView) findViewById(R.id.item2);
         btAdapter = BluetoothAdapter.getDefaultAdapter();
 
+        pitch = 1.0;
+
         item1.setText(Element1);
-        item2.setText(Element2);
+//        item2.setText(Element2);
+
+
+        t1 = new TextToSpeech( getApplicationContext() , new TextToSpeech.OnInitListener() {
+            @Override
+            public void onInit(int status){
+                if( status != TextToSpeech.ERROR ){
+                    t1.setLanguage(Locale.US);
+                }
+            }
+        });
+
+
+        textView = (TextView) findViewById(R.id.textView);
 
         btnOnOff1.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
@@ -88,11 +115,12 @@ public class HomeScreen extends ActionBarActivity {
                 if (btSocket != null) {
                     if (isChecked) {
                         Toast.makeText(getApplicationContext(), "Switch-1 ON", Toast.LENGTH_SHORT).show();
-                        sendData("1");
-
+                        sendData("*13");
+                        beginListenForData();
                     } else {
                         Toast.makeText(getApplicationContext(), "Switch-1 OFF", Toast.LENGTH_SHORT).show();
-                        sendData("0");
+                        sendData("*13");
+                        beginListenForData();
                     }
                 } else {
                     Toast.makeText(getApplicationContext(), "No connection detected", Toast.LENGTH_SHORT).show();
@@ -100,7 +128,7 @@ public class HomeScreen extends ActionBarActivity {
             }
         });
 
-        btnOnOff2.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+  /*      btnOnOff2.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
                 mMediaPlayer.start();
@@ -119,7 +147,7 @@ public class HomeScreen extends ActionBarActivity {
                 }
             }
         });
-
+*/
         btnScan.setOnClickListener(new OnClickListener() {
             public void onClick(View v) {
                 Intent scanMode = new Intent(HomeScreen.this, Scanning.class);
@@ -158,6 +186,7 @@ public class HomeScreen extends ActionBarActivity {
             }
         });
 
+/*
 //        Setting up a click event for the element name tag that will allow users to edit the appliances name
         item2.setOnClickListener(new OnClickListener() {
             public void onClick(View v) {
@@ -186,9 +215,8 @@ public class HomeScreen extends ActionBarActivity {
                 alertDialog.show();
             }
         });
-
+*/
     }
-
     @Override
     public void onResume() {
         super.onResume();
@@ -248,6 +276,12 @@ public class HomeScreen extends ActionBarActivity {
                 outStream = btSocket.getOutputStream();
             } catch (IOException e) {
                 errorExit("Fatal Error", "In onResume() and output stream creation failed:" + e.getMessage() + ".");
+            }
+
+            try {
+                inputStream = btSocket.getInputStream();
+            } catch ( IOException e){
+                errorExit("Fatal Error", "In onResume() and Input stream creation failed:" + e.getMessage() + ".");
             }
         }
     }
@@ -319,6 +353,161 @@ public class HomeScreen extends ActionBarActivity {
         }
     }
 
+/*
+    private String receiveData(){
+        byte[] msgBuffer = message.getBytes();
+        String str;
+        Log.d(TAG , "...Receiving data!");
+
+        try{
+            inStream.read();
+        }
+        catch (IOException e){
+            String msg = "Some problem occured during read: " + e.getMessage();
+            if (address.equals("00:00:00:00:00:00"))
+                msg = msg + "\nUpdate your server address from 00:00:00:00:00:00 to correct address ";
+            errorExit("Fatal Error" , msg);
+        }
+        return str;
+    }
+*/
+
+    private boolean distance ( String x , int threshold){
+        if ( Integer.valueOf(x) < threshold )
+            return true;
+        else
+            return false;
+    }
+    private boolean left( String dist[]){
+        return distance( dist[0] , 100 );
+    }
+
+    private boolean right( String dist[]){
+        return  distance( dist[1] , 100 );
+    }
+
+    private boolean front( String dist[]){
+        return distance( dist[2] , 150 );
+    }
+
+    void beginListenForData()
+    {
+        final Handler handler = new Handler();
+        stopThread = false;
+        buffer = new byte[1024];
+        Thread thread  = new Thread(new Runnable()
+        {
+            public void run()
+            {
+                while(!Thread.currentThread().isInterrupted() && !stopThread)
+                {
+                    try
+                    {
+                        int byteCount = inputStream.available();
+                        if(byteCount > 0)
+                        {
+                            byte[] rawBytes = new byte[byteCount];
+                            inputStream.read(rawBytes);
+                            final String string=new String(rawBytes,"UTF-8");
+                            //String distances[] = string.split("&");
+                            if( string.split("&").length == 3 ) {
+
+                                prev = orig;
+                                orig = string.split("&");
+
+                                if ( left(orig) ) {
+                                    if (Integer.valueOf(orig[0]) < Integer.valueOf(prev[0])) {
+                                        if (state == "Obstacle at left")
+                                            pitch += 0.15;
+                                    }
+                                    else
+                                        state = "Obstacle at left";
+                                }
+
+                                if ( right(orig) ) {
+                                    if (Integer.valueOf(orig[1]) < Integer.valueOf(prev[1]) && right(orig)) {
+                                        if (state == "Obstacle at Right")
+                                            pitch += 0.15;
+                                    }
+                                    else
+                                        state = "Obstacle at Right";
+                                }
+
+                                if ( front(orig) ) {
+                                    if (Integer.valueOf(orig[2]) < Integer.valueOf(prev[2]) && front(orig)){
+                                        if (state == "Obstacle at Front")
+                                            pitch += 0.15;
+                                    }
+                                    else
+                                        state = "Obstacle at Front";
+                                }
+
+                                if ( left(orig) && front(orig) ) {
+                                    if (Integer.valueOf(orig[0]) < Integer.valueOf(prev[0])
+                                            && Integer.valueOf(orig[2]) < Integer.valueOf(prev[2]) && left(orig) && front(orig)) {
+                                        if (state == "Obstacle at Left and Front")
+                                            pitch += 0.15;
+                                    }
+                                    else
+                                        state = "Obstacle at Left and Front";
+                                }
+
+                                if ( left(orig) && right(orig) ) {
+                                    if (Integer.valueOf(orig[0]) < Integer.valueOf(prev[0])
+                                            && Integer.valueOf(orig[1]) < Integer.valueOf(prev[1]) && left(orig) && right(orig)) {
+                                        if (state == "Obstacle at Left and Right")
+                                            pitch += 0.15;
+                                    }
+                                    else
+                                        state = "Obstacle at Left and Right";
+                                }
+
+                                if ( right(orig) && front(orig) ) {
+                                    if (Integer.valueOf(orig[1]) < Integer.valueOf(prev[1])
+                                            && Integer.valueOf(orig[2]) < Integer.valueOf(prev[2]) ) {
+                                        if (state == "Obstacle at Right and Front")
+                                            pitch += 0.15;
+                                    }
+                                    else
+                                        state = "Obstacle at Right and Front";
+                                }
+
+                                if ( right(orig) && left(orig) && front(orig) ) {
+                                    if (Integer.valueOf(orig[1]) < Integer.valueOf(prev[1]) &&
+                                            Integer.valueOf(orig[0]) < Integer.valueOf(prev[0]) &&
+                                            Integer.valueOf(orig[2]) < Integer.valueOf(prev[2])) {
+                                        if (state == "Please Go Back")
+                                            pitch += 0.25;
+                                    } else
+                                        state = "Please Go Back";
+                                }
+
+                                else {
+                                    state = "";
+                                    if (pitch > 1)
+                                        pitch -= 0.15;
+                                }
+                                handler.post(new Runnable() {
+                                    public void run() {
+                                        //        textView.append(string);
+                                        t1.setPitch((float)pitch);
+                                        t1.speak(state, TextToSpeech.QUEUE_FLUSH, null);
+                                    }
+                                });
+                            }
+
+                        }
+                    }
+                    catch (IOException ex)
+                    {
+                        stopThread = true;
+                    }
+                }
+            }
+        });
+
+        thread.start();
+    }
     private void errorExit(String title, String message) {
         Toast msg = Toast.makeText(getBaseContext(),
                 title + " - " + message, Toast.LENGTH_LONG);
@@ -410,7 +599,7 @@ public class HomeScreen extends ActionBarActivity {
                             "\n3. If the led turns green, your connection has been made else " +
                             "led turns red." +
                             "\n4.In case of failure, follow from step '2' again." +
-                            "\n\n\u00A9 Taranjeet Singh")
+                            "\n\n\u00A9 FComm")
                     .setCancelable(false)
                     .setIcon(R.drawable.about)
                     .setNeutralButton("OK", null)
@@ -448,7 +637,7 @@ public class HomeScreen extends ActionBarActivity {
             editor.putString("RecentMAC", address);
         }
         editor.putString("eName1", String.valueOf(item1.getText()));
-        editor.putString("eName2", String.valueOf(item2.getText()));
+  //      editor.putString("eName2", String.valueOf(item2.getText()));
         editor.apply();
         if (btSocket != null) {
             try {
